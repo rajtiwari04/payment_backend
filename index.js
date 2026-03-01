@@ -1,115 +1,75 @@
+import axios from 'axios';
 
-require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
-const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
-const mongoSanitize = require('express-mongo-sanitize');
-const hpp = require('hpp');
-const connectDB = require('./config/db');
+const API_BASE = process.env.REACT_APP_API_URL;
 
-const authRoutes = require('./routes/authRoutes');
-const productRoutes = require('./routes/productRoutes');
-const cartRoutes = require('./routes/cartRoutes');
-const orderRoutes = require('./routes/orderRoutes');
-const paymentRoutes = require('./routes/paymentRoutes');
-const adminRoutes = require('./routes/adminRoutes');
+const api = axios.create({
+  baseURL: API_BASE,
+  headers: { 'Content-Type': 'application/json' }
+});
 
-const app = express();
-app.set('trust proxy', 1);
+api.interceptors.request.use(config => {
+  const token = localStorage.getItem('token');
+  if (token) config.headers.Authorization = `Bearer ${token}`;
 
-connectDB();
+  const deviceId =
+    localStorage.getItem('deviceId') ||
+    'DEV_' + Math.random().toString(36).substr(2, 16).toUpperCase();
 
-app.use(helmet());
+  localStorage.setItem('deviceId', deviceId);
+  config.headers['x-device-id'] = deviceId;
 
-const allowedOrigins = [
-  process.env.CLIENT_URL,
-  'http://localhost:3000'
-];
+  return config;
+});
 
-app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
+api.interceptors.response.use(
+  res => res,
+  err => {
+    if (err.response?.status === 401) {
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      window.location.href = '/login';
     }
-  },
-  credentials: true
-}));
+    return Promise.reject(err);
+  }
+);
 
-app.use(express.json({ limit: '10kb' }));
-app.use(mongoSanitize());
-app.use(hpp());
+export const authAPI = {
+  register: data => api.post('/api/auth/register', data),
+  login: data => api.post('/api/auth/login', data),
+  getProfile: () => api.get('/api/auth/profile'),
+  updateProfile: data => api.put('/api/auth/profile', data)
+};
 
-const globalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 200,
-  standardHeaders: true,
-  legacyHeaders: false
-});
+export const productAPI = {
+  getAll: params => api.get('/api/products', { params }),
+  getOne: id => api.get(`/api/products/${id}`),
+  create: data => api.post('/api/products', data),
+  update: (id, data) => api.put(`/api/products/${id}`, data),
+  delete: id => api.delete(`/api/products/${id}`),
+  seed: () => api.post('/api/products/admin/seed')
+};
 
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 20,
-  standardHeaders: true,
-  legacyHeaders: false
-});
+export const cartAPI = {
+  validate: items => api.post('/api/cart/validate', { items })
+};
 
-app.use('/api', globalLimiter);
-app.use('/api/auth', authLimiter);
+export const orderAPI = {
+  create: data => api.post('/api/orders', data),
+  getAll: () => api.get('/api/orders'),
+  getOne: id => api.get(`/api/orders/${id}`)
+};
 
-app.get('/', (req, res) => {
-  res.status(200).json({
-    success: true,
-    message: 'Payment Backend API is running',
-    environment: process.env.NODE_ENV
-  });
-});
+export const paymentAPI = {
+  initiate: data => api.post('/api/payment/initiate', data),
+  verifyOTP: data => api.post('/api/payment/verify-otp', data),
+  getTransaction: id => api.get(`/api/payment/transaction/${id}`)
+};
 
-app.get('/api/health', (req, res) => {
-  res.status(200).json({
-    status: 'OK',
-    timestamp: new Date().toISOString()
-  });
-});
+export const adminAPI = {
+  getDashboard: () => api.get('/api/admin/dashboard'),
+  getFraudLogs: params => api.get('/api/admin/fraud-logs', { params }),
+  reviewFraudLog: (id, notes) =>
+    api.put(`/api/admin/fraud-logs/${id}/review`, { notes })
+};
 
-app.use('/api/auth', authRoutes);
-app.use('/api/products', productRoutes);
-app.use('/api/cart', cartRoutes);
-app.use('/api/orders', orderRoutes);
-app.use('/api/payment', paymentRoutes);
-app.use('/api/admin', adminRoutes);
-
-app.all('*', (req, res) => {
-  res.status(404).json({
-    success: false,
-    message: `Route ${req.originalUrl} not found`
-  });
-});
-
-app.use((err, req, res, next) => {
-  res.status(err.status || 500).json({
-    success: false,
-    message: process.env.NODE_ENV === 'production'
-      ? 'Internal Server Error'
-      : err.message
-  });
-});
-
-const PORT = process.env.PORT || 5000;
-
-const server = app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT} in ${process.env.NODE_ENV} mode`);
-});
-
-process.on('unhandledRejection', (err) => {
-  console.error('Unhandled Rejection:', err.message);
-  server.close(() => process.exit(1));
-});
-
-process.on('SIGTERM', () => {
-  server.close(() => process.exit(0));
-});
-
-module.exports = app;
+export default api;
