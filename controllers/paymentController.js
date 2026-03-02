@@ -3,11 +3,16 @@ const Transaction = require('../models/Transaction');
 const User = require('../models/User');
 const Product = require('../models/Product');
 
+// Security & Services
 const { encrypt, generateToken, maskCardNumber } = require('../security/encryption');
-const { generateOTP, hashOTP, verifyOTP } = require('../security/otp');
+const { generateOTP, hashOTP, verifyOTP, getOTPExpiry } = require('../security/otp'); // Added getOTPExpiry
 const { assessRisk, logFraud } = require('../security/fraudDetection');
 const { processPaymentGateway } = require('../services/paymentGateway');
 const { processBankApproval } = require('../services/bankServer');
+
+// --- NEW IMPORT: Adjust the path to match where your email service is located ---
+const { sendOtpEmail } = require('../services/emailService'); 
+// ------------------------------------------------------------------------------
 
 const initiatePayment = async (req, res) => {
   try {
@@ -94,21 +99,40 @@ const initiatePayment = async (req, res) => {
     const hashedOtp = hashOTP(rawOtp);
 
     user.otp = hashedOtp;
-    user.otpExpiry = new Date(Date.now() + 5 * 60 * 1000);
+    user.otpExpiry = getOTPExpiry(); // Using your OTP service function instead of hardcoding
     await user.save();
 
     transaction.status = 'otp_pending';
     await transaction.save();
 
-    if (process.env.NODE_ENV === 'production') {
-      console.log(`Sending OTP to ${user.email}`);
-    } else {
-      console.log(`[DEV OTP] ${rawOtp}`);
+    // --- NEW LOGIC: Sending the email and handling potential failures ---
+    try {
+      await sendOtpEmail(user.email, rawOtp, order._id);
+      
+      if (process.env.NODE_ENV !== 'production') {
+        console.log(`[DEV OTP] Sent ${rawOtp} to ${user.email}`);
+      }
+    } catch (emailError) {
+      console.error('Failed to send OTP email:', emailError);
+      
+      // Revert states if email fails so the user can try again safely
+      transaction.status = 'failed';
+      await transaction.save();
+      
+      user.otp = null;
+      user.otpExpiry = null;
+      await user.save();
+
+      return res.status(500).json({ 
+        success: false, 
+        message: 'Failed to send OTP email. Please try initiating the payment again.' 
+      });
     }
+    // ------------------------------------------------------------------
 
     res.json({
       success: true,
-      message: 'OTP sent to registered email/phone',
+      message: 'OTP sent to registered email',
       transactionId: transaction._id,
       paymentToken,
       maskedCard,
