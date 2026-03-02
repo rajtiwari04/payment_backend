@@ -2,7 +2,6 @@ const Order = require('../models/Order');
 const Transaction = require('../models/Transaction');
 const User = require('../models/User');
 const Product = require('../models/Product');
-const { sendOtpEmail } = require('../services/emailService');
 
 const { encrypt, generateToken, maskCardNumber } = require('../security/encryption');
 const { generateOTP, hashOTP, verifyOTP } = require('../security/otp');
@@ -44,6 +43,8 @@ const initiatePayment = async (req, res) => {
 
     const paymentToken = generateToken();
     const maskedCard = maskCardNumber(cardNumber);
+    const encryptedCard = encrypt(cardNumber);
+    const encryptedCvv = encrypt(cvv);
 
     const transaction = await Transaction.create({
       order: order._id,
@@ -99,20 +100,15 @@ const initiatePayment = async (req, res) => {
     transaction.status = 'otp_pending';
     await transaction.save();
 
-    try {
-      await sendOtpEmail(user.email, rawOtp, order._id);
-      console.log("OTP email sent successfully to:", user.email);
-    } catch (emailError) {
-      console.error("Email sending failed:", emailError.message);
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to send OTP email. Please try again.'
-      });
+    if (process.env.NODE_ENV === 'production') {
+      console.log(`Sending OTP to ${user.email}`);
+    } else {
+      console.log(`[DEV OTP] ${rawOtp}`);
     }
 
     res.json({
       success: true,
-      message: 'OTP sent to registered email',
+      message: 'OTP sent to registered email/phone',
       transactionId: transaction._id,
       paymentToken,
       maskedCard,
@@ -158,6 +154,7 @@ const verifyOTPAndProcess = async (req, res) => {
     await user.save();
 
     const order = await Order.findById(transaction.order);
+
     order.status = 'processing';
     order.otpVerified = true;
     await order.save();
