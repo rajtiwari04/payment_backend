@@ -2,8 +2,9 @@ const Order = require('../models/Order');
 const Transaction = require('../models/Transaction');
 const User = require('../models/User');
 const Product = require('../models/Product');
-const { encrypt, decrypt, generateToken, maskCardNumber } = require('../security/encryption');
-const { generateOTP, getOTPExpiry, isOTPValid } = require('../security/otp');
+
+const { encrypt, generateToken, maskCardNumber } = require('../security/encryption');
+const { generateOTP, hashOTP, verifyOTP } = require('../security/otp');
 const { assessRisk, logFraud } = require('../security/fraudDetection');
 const { processPaymentGateway } = require('../services/paymentGateway');
 const { processBankApproval } = require('../services/bankServer');
@@ -11,12 +12,19 @@ const { processBankApproval } = require('../services/bankServer');
 const initiatePayment = async (req, res) => {
   try {
     const { orderId, cardNumber, cardHolderName, expiryMonth, expiryYear, cvv, biometricVerified } = req.body;
+
     const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress || 'unknown';
     const userAgent = req.headers['user-agent'] || 'unknown';
     const deviceId = req.headers['x-device-id'] || 'default_device';
 
-    const order = await Order.findOne({ _id: orderId, user: req.user._id, status: 'pending' });
-    if (!order) return res.status(404).json({ success: false, message: 'Order not found or already processed' });
+    const order = await Order.findOne({
+      _id: orderId,
+      user: req.user._id,
+      status: 'pending'
+    });
+
+    if (!order)
+      return res.status(404).json({ success: false, message: 'Order not found or already processed' });
 
     const user = await User.findById(req.user._id);
 
@@ -47,8 +55,17 @@ const initiatePayment = async (req, res) => {
       paymentMethod: order.paymentMethod,
       amount: order.totalAmount,
       status: 'initiated',
-      deviceInfo: { deviceId, userAgent, ip, isNewDevice: user.isNewDevice(deviceId) },
-      riskAssessment: { riskScore: riskAssessment.riskScore, flags: riskAssessment.flags, assessed: true },
+      deviceInfo: {
+        deviceId,
+        userAgent,
+        ip,
+        isNewDevice: user.isNewDevice(deviceId)
+      },
+      riskAssessment: {
+        riskScore: riskAssessment.riskScore,
+        flags: riskAssessment.flags,
+        assessed: true
+      },
       biometricVerified: biometricVerified || false
     });
 
@@ -58,32 +75,36 @@ const initiatePayment = async (req, res) => {
         transactionId: transaction._id,
         orderId: order._id,
         riskScore: riskAssessment.riskScore,
-        flags: riskAssessment.flags,
-        deviceInfo: { deviceId, userAgent, ip, isNewDevice: user.isNewDevice(deviceId) },
-        transactionDetails: { amount: order.totalAmount, paymentMethod: order.paymentMethod, maskedCard }
+        flags: riskAssessment.flags
       });
+
       transaction.status = 'declined';
       await transaction.save();
+
       order.status = 'cancelled';
       await order.save();
+
       return res.status(403).json({
         success: false,
-        message: 'Transaction blocked due to suspicious activity',
-        riskScore: riskAssessment.riskScore,
-        flags: riskAssessment.flags,
-        transactionId: transaction._id
+        message: 'Transaction blocked due to suspicious activity'
       });
     }
 
-    const otp = generateOTP(6);
-    const otpExpiry = getOTPExpiry();
-    user.otp = { code: otp, expiresAt: otpExpiry, attempts: 0 };
+    const rawOtp = generateOTP();
+    const hashedOtp = hashOTP(rawOtp);
+
+    user.otp = hashedOtp;
+    user.otpExpiry = new Date(Date.now() + 5 * 60 * 1000);
     await user.save();
 
     transaction.status = 'otp_pending';
     await transaction.save();
 
-    console.log(`OTP for user ${user.email}: ${otp}`);
+    if (process.env.NODE_ENV === 'production') {
+      console.log(`Sending OTP to ${user.email}`);
+    } else {
+      console.log(`[DEV OTP] ${rawOtp}`);
+    }
 
     res.json({
       success: true,
@@ -92,9 +113,9 @@ const initiatePayment = async (req, res) => {
       paymentToken,
       maskedCard,
       riskScore: riskAssessment.riskScore,
-      otpRequired: true,
-      devOtp: process.env.NODE_ENV === 'development' ? otp : undefined
+      otpRequired: true
     });
+
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -104,36 +125,36 @@ const verifyOTPAndProcess = async (req, res) => {
   try {
     const { transactionId, otp, biometricVerified } = req.body;
 
-    const transaction = await Transaction.findOne({ _id: transactionId, user: req.user._id, status: 'otp_pending' });
-    if (!transaction) return res.status(404).json({ success: false, message: 'Transaction not found or already processed' });
+    const transaction = await Transaction.findOne({
+      _id: transactionId,
+      user: req.user._id,
+      status: 'otp_pending'
+    });
 
-    const user = await User.findById(req.user._id).select('+otp');
-    if (!user.otp || !user.otp.code) {
+    if (!transaction)
+      return res.status(404).json({ success: false, message: 'Transaction not found or already processed' });
+
+    const user = await User.findById(req.user._id);
+
+    if (!user.otp || !user.otpExpiry)
       return res.status(400).json({ success: false, message: 'No OTP found, please reinitiate payment' });
-    }
 
-    if (user.otp.attempts >= 3) {
-      transaction.status = 'failed';
-      await transaction.save();
-      return res.status(400).json({ success: false, message: 'Too many OTP attempts. Transaction cancelled.' });
-    }
+    const otpResult = verifyOTP(otp, user.otp, user.otpExpiry);
 
-    const otpResult = isOTPValid(otp, user.otp.code, user.otp.expiresAt);
-    if (!otpResult.valid) {
-      user.otp.attempts += 1;
-      await user.save();
-      return res.status(400).json({ success: false, message: otpResult.reason, attemptsLeft: 3 - user.otp.attempts });
-    }
+    if (!otpResult.valid)
+      return res.status(400).json({ success: false, message: otpResult.reason });
 
     transaction.otpVerified = true;
     if (biometricVerified) transaction.biometricVerified = true;
     transaction.status = 'processing';
     await transaction.save();
 
-    user.otp = undefined;
+    user.otp = null;
+    user.otpExpiry = null;
     await user.save();
 
     const order = await Order.findById(transaction.order);
+
     order.status = 'processing';
     order.otpVerified = true;
     await order.save();
@@ -144,22 +165,9 @@ const verifyOTPAndProcess = async (req, res) => {
       paymentMethod: transaction.paymentMethod
     });
 
-    transaction.gatewayResponse = {
-      gatewayTransactionId: gatewayResponse.gatewayTransactionId,
-      authCode: gatewayResponse.authCode,
-      responseCode: gatewayResponse.responseCode,
-      responseMessage: gatewayResponse.responseMessage,
-      processedAt: gatewayResponse.processedAt
-    };
-
-    const bankResponse = await processBankApproval(gatewayResponse, { amount: transaction.amount });
-
-    transaction.bankResponse = {
-      bankTransactionId: bankResponse.bankTransactionId,
-      approved: bankResponse.approved,
-      reason: bankResponse.reason,
-      processedAt: bankResponse.processedAt
-    };
+    const bankResponse = await processBankApproval(gatewayResponse, {
+      amount: transaction.amount
+    });
 
     if (bankResponse.approved) {
       transaction.status = 'approved';
@@ -167,7 +175,9 @@ const verifyOTPAndProcess = async (req, res) => {
       order.transaction = transaction._id;
 
       for (const item of order.items) {
-        await Product.findByIdAndUpdate(item.product, { $inc: { stock: -item.quantity } });
+        await Product.findByIdAndUpdate(item.product, {
+          $inc: { stock: -item.quantity }
+        });
       }
     } else {
       transaction.status = 'declined';
@@ -179,18 +189,22 @@ const verifyOTPAndProcess = async (req, res) => {
 
     res.json({
       success: bankResponse.approved,
-      message: bankResponse.approved ? 'Payment successful!' : 'Payment declined by bank',
+      message: bankResponse.approved
+        ? 'Payment successful!'
+        : 'Payment declined by bank',
       transaction: {
         id: transaction._id,
         status: transaction.status,
         amount: transaction.amount,
         maskedCard: transaction.maskedCardNumber,
-        paymentToken: transaction.paymentToken,
-        gatewayTransactionId: gatewayResponse.gatewayTransactionId,
-        bankTransactionId: bankResponse.bankTransactionId
+        paymentToken: transaction.paymentToken
       },
-      order: { id: order._id, status: order.status }
+      order: {
+        id: order._id,
+        status: order.status
+      }
     });
+
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -198,12 +212,23 @@ const verifyOTPAndProcess = async (req, res) => {
 
 const getTransactionStatus = async (req, res) => {
   try {
-    const transaction = await Transaction.findOne({ _id: req.params.id, user: req.user._id }).lean();
-    if (!transaction) return res.status(404).json({ success: false, message: 'Transaction not found' });
+    const transaction = await Transaction.findOne({
+      _id: req.params.id,
+      user: req.user._id
+    }).lean();
+
+    if (!transaction)
+      return res.status(404).json({ success: false, message: 'Transaction not found' });
+
     res.json({ success: true, transaction });
+
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
-module.exports = { initiatePayment, verifyOTPAndProcess, getTransactionStatus };
+module.exports = {
+  initiatePayment,
+  verifyOTPAndProcess,
+  getTransactionStatus
+};

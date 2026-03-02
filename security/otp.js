@@ -1,28 +1,49 @@
 const crypto = require('crypto');
 
-const generateOTP = (length = 6) => {
-  const digits = '0123456789';
-  let otp = '';
-  const randomBytes = crypto.randomBytes(length);
-  for (let i = 0; i < length; i++) {
-    otp += digits[randomBytes[i] % digits.length];
-  }
-  return otp;
+const generateOTP = () => {
+  const buffer = crypto.randomBytes(3);
+  const num = buffer.readUIntBE(0, 3) % 900000 + 100000;
+  return String(num);
+};
+
+const hashOTP = (rawOtp) => {
+  return crypto.createHash('sha256').update(rawOtp).digest('hex');
 };
 
 const getOTPExpiry = (minutes = null) => {
-  const expireMinutes = minutes || parseInt(process.env.OTP_EXPIRE_MINUTES) || 5;
+  const expireMinutes =
+    minutes || parseInt(process.env.OTP_EXPIRE_MINUTES) || 5;
   return new Date(Date.now() + expireMinutes * 60 * 1000);
 };
 
 const isOTPExpired = (expiresAt) => {
-  return new Date() > new Date(expiresAt);
+  return !expiresAt || new Date() > new Date(expiresAt);
 };
 
-const isOTPValid = (inputOtp, storedOtp, expiresAt) => {
-  if (isOTPExpired(expiresAt)) return { valid: false, reason: 'OTP has expired' };
-  if (inputOtp !== storedOtp) return { valid: false, reason: 'Invalid OTP' };
+const verifyOTP = (submittedOtp, storedHash, expiresAt) => {
+  if (!storedHash || !expiresAt)
+    return { valid: false, reason: 'OTP not found' };
+
+  if (isOTPExpired(expiresAt))
+    return { valid: false, reason: 'OTP has expired' };
+
+  const submittedHash = hashOTP(submittedOtp);
+
+  const isMatch = crypto.timingSafeEqual(
+    Buffer.from(submittedHash, 'hex'),
+    Buffer.from(storedHash, 'hex')
+  );
+
+  if (!isMatch)
+    return { valid: false, reason: 'Invalid OTP' };
+
   return { valid: true };
 };
 
-module.exports = { generateOTP, getOTPExpiry, isOTPExpired, isOTPValid };
+module.exports = {
+  generateOTP,
+  hashOTP,
+  getOTPExpiry,
+  isOTPExpired,
+  verifyOTP
+};
