@@ -1,37 +1,15 @@
-const nodemailer = require("nodemailer");
+const sgMail = require("@sendgrid/mail");
 
-/**
- * Creates a reusable Nodemailer transporter using Gmail SMTP.
- * Credentials are pulled from environment variables — never hardcoded.
- */
-const createTransporter = () => {
-  return nodemailer.createTransport({
-    service: "gmail",
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS, // Use Gmail App Password, NOT your account password
-    },
-  });
-};
+sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
-/**
- * Sends a payment OTP to the user's registered email address.
- *
- * @param {string} toEmail   - Recipient email (from User model)
- * @param {string} rawOtp    - The plain (un-hashed) OTP to send
- * @param {string} orderId   - Order reference for context in the email
- * @returns {Promise<void>}
- */
 const sendOtpEmail = async (toEmail, rawOtp, orderId) => {
   if (!toEmail || !rawOtp) {
     throw new Error("sendOtpEmail: toEmail and rawOtp are required.");
   }
 
-  const transporter = createTransporter();
-
-  const mailOptions = {
-    from: `"Payment Security" <${process.env.EMAIL_USER}>`,
+  const msg = {
     to: toEmail,
+    from: `"Payment Security" <${process.env.SENDER_EMAIL}>`,
     subject: "Your Payment OTP – Do Not Share",
     text: `
 Your One-Time Password (OTP) for payment verification is:
@@ -74,7 +52,7 @@ If you did not initiate this payment, please contact support immediately.
     `,
   };
 
-  await transporter.sendMail(mailOptions);
+  await sgMail.send(msg);
 };
 
 module.exports = { sendOtpEmail };
