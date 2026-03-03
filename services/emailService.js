@@ -1,58 +1,67 @@
 const sgMail = require("@sendgrid/mail");
 
-sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+if (!process.env.SENDGRID_API_KEY) {
+  console.error("SENDGRID_API_KEY is missing");
+} else {
+  sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+}
 
 const sendOtpEmail = async (toEmail, rawOtp, orderId) => {
+  console.log("sendOtpEmail called");
+  console.log("Sending OTP to:", toEmail);
+
   if (!toEmail || !rawOtp) {
     throw new Error("sendOtpEmail: toEmail and rawOtp are required.");
   }
 
   const msg = {
     to: toEmail,
-    from: `"Payment Security" <${process.env.SENDER_EMAIL}>`,
+    from: {
+      email: process.env.SENDER_EMAIL,
+      name: "Payment Security"
+    },
     subject: "Your Payment OTP – Do Not Share",
     text: `
 Your One-Time Password (OTP) for payment verification is:
 
-  ${rawOtp}
+${rawOtp}
 
 Order Reference: ${orderId || "N/A"}
 
 This OTP is valid for 5 minutes.
-Do NOT share this code with anyone — our team will never ask for it.
+Do NOT share this code with anyone.
 
-If you did not initiate this payment, please contact support immediately.
+If you did not initiate this payment, contact support immediately.
     `.trim(),
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 480px; margin: auto; border: 1px solid #e0e0e0; border-radius: 8px; padding: 32px;">
-        <h2 style="color: #1a1a1a; margin-bottom: 4px;">Payment OTP Verification</h2>
-        <p style="color: #555; font-size: 14px; margin-top: 0;">Use the OTP below to complete your payment.</p>
-
-        <div style="background: #f5f5f5; border-radius: 6px; padding: 20px; text-align: center; margin: 24px 0;">
-          <span style="font-size: 36px; font-weight: bold; letter-spacing: 8px; color: #1a1a1a;">${rawOtp}</span>
+        <h2>Payment OTP Verification</h2>
+        <p>Use the OTP below to complete your payment.</p>
+        <div style="background: #f5f5f5; padding: 20px; text-align: center; margin: 24px 0;">
+          <span style="font-size: 36px; font-weight: bold; letter-spacing: 8px;">
+            ${rawOtp}
+          </span>
         </div>
-
-        <table style="width: 100%; font-size: 13px; color: #666;">
-          <tr>
-            <td><strong>Order Ref:</strong></td>
-            <td>${orderId || "N/A"}</td>
-          </tr>
-          <tr>
-            <td><strong>Valid for:</strong></td>
-            <td>5 minutes</td>
-          </tr>
-        </table>
-
-        <hr style="border: none; border-top: 1px solid #e0e0e0; margin: 24px 0;" />
-        <p style="font-size: 12px; color: #999;">
-          ⚠️ Do <strong>NOT</strong> share this OTP with anyone. Our team will never ask for it.<br/>
-          If you did not initiate this payment, contact support immediately.
+        <p><strong>Order Ref:</strong> ${orderId || "N/A"}</p>
+        <p><strong>Valid for:</strong> 5 minutes</p>
+        <hr/>
+        <p style="font-size: 12px;">
+          Do NOT share this OTP with anyone.
         </p>
       </div>
-    `,
+    `
   };
 
-  await sgMail.send(msg);
+  try {
+    const response = await sgMail.send(msg);
+    console.log("SendGrid SUCCESS:", response[0].statusCode);
+    return true;
+  } catch (error) {
+    console.error("SendGrid ERROR STATUS:", error.code);
+    console.error("SendGrid ERROR BODY:", error.response?.body);
+    console.error("SendGrid FULL ERROR:", error);
+    throw new Error("Failed to send OTP email");
+  }
 };
 
 module.exports = { sendOtpEmail };
