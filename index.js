@@ -97,11 +97,15 @@ app.use((err, req, res, next) => {
   });
 });
 
+
 const PORT = process.env.PORT || 5000;
 
 const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT} in ${process.env.NODE_ENV} mode`);
 });
+console.log("API KEY exists:", !!process.env.SENDGRID_API_KEY);
+console.log("Sender:", process.env.SENDER_EMAIL);
+
 
 process.on('unhandledRejection', (err) => {
   console.error('Unhandled Rejection:', err.message);
