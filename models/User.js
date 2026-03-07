@@ -8,33 +8,29 @@ const userSchema = new mongoose.Schema({
     trim: true,
     maxlength: 100
   },
-
   email: {
     type: String,
-    required: true,
+    required: [true, 'Email is required'],
     unique: true,
     lowercase: true,
-    trim: true
+    trim: true,
+    match: [/^\S+@\S+\.\S+$/, 'Invalid email format']
   },
-
   password: {
     type: String,
     required: [true, 'Password is required'],
     minlength: 8,
     select: false
   },
-
   role: {
     type: String,
     enum: ['user', 'admin'],
     default: 'user'
   },
-
   phone: {
     type: String,
     trim: true
   },
-
   address: {
     street: String,
     city: String,
@@ -42,7 +38,6 @@ const userSchema = new mongoose.Schema({
     zip: String,
     country: { type: String, default: 'US' }
   },
-
   deviceFingerprints: [{
     deviceId: String,
     userAgent: String,
@@ -50,30 +45,22 @@ const userSchema = new mongoose.Schema({
     firstSeen: { type: Date, default: Date.now },
     lastSeen: { type: Date, default: Date.now }
   }],
-
   knownLocations: [{
     ip: String,
     city: String,
     country: String,
     firstSeen: { type: Date, default: Date.now }
   }],
-
-  otp: { 
-    type: String, 
-    default: null 
+  otp: {
+    code: String,
+    expiresAt: Date,
+    attempts: { type: Number, default: 0 }
   },
-
-  otpExpiry: { 
-    type: Date, 
-    default: null 
-  },
-
   isActive: { type: Boolean, default: true },
   twoFactorEnabled: { type: Boolean, default: true },
   biometricEnabled: { type: Boolean, default: false },
-
+  createdAt: { type: Date, default: Date.now },
   lastLogin: Date
-
 }, { timestamps: true });
 
 userSchema.pre('save', async function (next) {
