@@ -41,15 +41,26 @@ const getProduct = async (req, res) => {
 
 const createProduct = async (req, res) => {
   try {
-    let productData = { ...req.body, createdBy: req.user._id };
+    const getImageUrl = (product) => {
+      const query = `${product.name} ${product.category} ${product.brand}`;
+      return `https://source.unsplash.com/400x400/?${encodeURIComponent(query)}&sig=${Date.now()}`;
+    };
 
-    if (!productData.images || productData.images.length === 0) {
+    let productData = {
+      ...req.body,
+      createdBy: req.user._id
+    };
+
+    if (!productData.images || productData.images.length === 0 || !productData.images[0]) {
       productData.images = [getImageUrl(productData)];
     }
+
+    console.log("FINAL DATA BEING SAVED:", productData); // 👈 DEBUG
 
     const product = await Product.create(productData);
 
     res.status(201).json({ success: true, product });
+
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }
