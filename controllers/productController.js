@@ -1,4 +1,6 @@
 const Product = require('../models/Product');
+const getImageUrl = require('../services/getImage');
+
 const getProducts = async (req, res) => {
   try {
     const { category, search, minPrice, maxPrice, page = 1, limit = 12, sort = '-createdAt' } = req.query;
@@ -35,9 +37,18 @@ const getProduct = async (req, res) => {
   }
 };
 
+
+
 const createProduct = async (req, res) => {
   try {
-    const product = await Product.create({ ...req.body, createdBy: req.user._id });
+    let productData = { ...req.body, createdBy: req.user._id };
+
+    if (!productData.images || productData.images.length === 0) {
+      productData.images = [getImageUrl(productData)];
+    }
+
+    const product = await Product.create(productData);
+
     res.status(201).json({ success: true, product });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
